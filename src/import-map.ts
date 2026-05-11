@@ -15,7 +15,7 @@ const OFFICIAL_LIBRARIES: LibImportMap = {
 }
 
 export function expandImportMap(): LibImportMap {
-	return JSON.parse(JSON.stringify(OFFICIAL_LIBRARIES))
+	return OFFICIAL_LIBRARIES
 }
 
 export type PackageMeta = { type: "named"; kind: ExprKind } | { type: "namespace"; config: Record<string, ExprKind> }
@@ -49,16 +49,6 @@ export function createImportMap(registeredImports: LibImportMap): ImportMap {
 					if (kind !== undefined) {
 						importPackages.set(spec.local.name, { type: "named", kind })
 					}
-				} else if (spec.type === "ImportDefaultSpecifier") {
-					const kind = config.default
-					if (kind !== undefined) {
-						importPackages.set(spec.local.name, { type: "named", kind })
-					}
-				} else if (spec.type === "ImportNamespaceSpecifier") {
-					importPackages.set(spec.local.name, {
-						type: "namespace",
-						config,
-					})
 				}
 			}
 		},

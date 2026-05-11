@@ -5,14 +5,21 @@
     "build": "tsdown",
     "test": "vitest --project twobj"
   },
+  "peerDependencies": {
+    "twobj": ">= 2.5.6 < 3"
+  },
   "devDependencies": {
     "@types/node": "25.6.2",
     "oxc-unshadowed-visitor": "0.0.1",
     "prettier": "3.8.3",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "react-is": "19.2.6",
     "rolldown": "1.0.0",
     "rolldown-string": "0.3.0",
     "tinyglobby": "^0.2.16",
     "tsdown": "0.22.0",
+    "twobj": "2.6.1",
     "vitest": "4.1.5"
   }
 }

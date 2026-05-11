@@ -13,6 +13,13 @@ import {
 } from "./common.js"
 import { withMagicString } from "rolldown-string"
 
+interface RecordData {
+	nodeStart: number
+	nodeEnd: number
+	isFullReplace: boolean
+	apply: (getTarget: () => string) => void
+}
+
 export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 	let isDev = false
 	const registeredImports = expandImportMap()
@@ -35,7 +42,11 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 		transform: {
 			filter: {
 				id: /\.[jt]sx?$/,
-				code: new RegExp(Object.keys(registeredImports).map(regexEscape).join("|")),
+				code: new RegExp(
+					Array.from(new Set(Object.values(registeredImports).flatMap(Object.keys)))
+						.map(regexEscape)
+						.join("|"),
+				),
 			},
 
 			handler: withMagicString(function (this, s, id, meta) {
@@ -56,7 +67,17 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					}
 				}
 
-				console.log(importMap.getTrackedNames())
+				const trackedNames = importMap.getTrackedNames()
+
+				const sv = new ScopedVisitor<RecordData>({
+					trackedNames,
+					walk: (program, visitor) => new Visitor(visitor).visit(program),
+					visitor: {
+						//
+					},
+				})
+
+				const records = sv.walk(program)
 
 				return
 			}),
