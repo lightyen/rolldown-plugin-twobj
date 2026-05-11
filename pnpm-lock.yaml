@@ -33,7 +33,7 @@ importers:
         specifier: 0.3.0
         version: 0.3.0(rolldown@1.0.0)
       tinyglobby:
-        specifier: ^0.2.16
+        specifier: 0.2.16
         version: 0.2.16
       tsdown:
         specifier: 0.22.0

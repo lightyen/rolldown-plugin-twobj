@@ -1,12 +1,12 @@
-export const ExprKind = {
-	Tw: 1,
-	Tx: 2,
-	Wrap: 3,
-	Theme: 4,
-	GlobalStyles: 5,
-} as const
-
-export type ExprKind = (typeof ExprKind)[keyof typeof ExprKind]
+export const enum ExprKind {
+	Tw = 1,
+	Tx,
+	Wrap,
+	Theme,
+	GlobalStyles,
+	EmotionCss,
+	EmotionStyled,
+}
 
 export function regexEscape(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")

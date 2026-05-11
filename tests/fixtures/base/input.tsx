@@ -1,9 +1,9 @@
-import { globalStyles, theme, tw, wrap } from "twobj"
+import { globalStyles, theme, tw, tx, wrap } from "twobj"
 
 globalStyles
 
 tw`divide-black`
-tw`flex items-center font-bold text-lg after:text-cyan-400`
+tx`flex items-center font-bold text-lg after:text-cyan-400`
 
 wrap`(hover: focus:):`
 

@@ -12,6 +12,9 @@ const OFFICIAL_LIBRARIES: LibImportMap = {
 		theme: ExprKind.Theme,
 		globalStyles: ExprKind.GlobalStyles,
 	},
+	"@emotion/react": {
+		css: ExprKind.EmotionCss,
+	},
 }
 
 export function expandImportMap(): LibImportMap {

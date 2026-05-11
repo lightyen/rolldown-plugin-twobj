@@ -37,7 +37,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 	const registeredImports = expandImportMap()
 
 	const tailwindConfig = resolveConfig(options.tailwindConfig ?? {})
-	const context = createContext(tailwindConfig)
+	const tw = createContext(tailwindConfig)
 
 	return {
 		name: "rolldown-plugin-twobj",
@@ -63,7 +63,6 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						.join("|"),
 				),
 			},
-
 			handler: withMagicString(function (this, s, id, meta) {
 				const lang = id.endsWith(".tsx")
 					? "tsx"
@@ -89,12 +88,67 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 
 				const trackedNames = importMap.getTrackedNames()
 
+				console.log(trackedNames)
+
+				let dataIndex = 0
+				const cached = new Map<string, number>()
+				const data: unknown[] = []
+
+				function addData(kind: ExprKind, input: string): string {
+					let i = cached.get(input)
+					if (i == undefined) {
+						i = dataIndex
+						cached.set(input, i)
+						switch (kind) {
+							case ExprKind.Tw:
+							case ExprKind.Tx:
+								data[i] = tw.css(input)
+								break
+							case ExprKind.Theme:
+								data[i] = tw.theme(input)
+								break
+							case ExprKind.Wrap:
+							default:
+								data[i] = null
+						}
+						dataIndex += 1
+					}
+					return `_tw[${i}]`
+				}
+
 				const labelContextStack: (string | null)[] = [null]
 				let inJsx = false
 				const sv = new ScopedVisitor<RecordData>({
 					trackedNames,
 					walk: (program, visitor) => new Visitor(visitor).visit(program),
 					visitor: {
+						Program(node, ctx) {
+							let hasEmotionCss = false
+							const meta = importMap.get("css")
+							if (meta?.type === "named" && meta.kind === ExprKind.EmotionCss) {
+								hasEmotionCss = true
+							}
+
+							ctx.record({
+								name: "tw",
+								node,
+								data: {
+									nodeStart: node.start,
+									nodeEnd: node.end,
+									isFullReplace: false,
+									apply: () => {
+										if (!hasEmotionCss) {
+											s.appendLeft(
+												0,
+												`import { css } from "@emotion/react";\nconst _tw = ${JSON.stringify(data)};`,
+											)
+										} else {
+											s.appendLeft(0, `const _tw = ${JSON.stringify(data)};`)
+										}
+									},
+								},
+							})
+						},
 						VariableDeclarator(node) {
 							let ctx = null
 							if (node.id.type === "Identifier") {
@@ -153,16 +207,23 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						TaggedTemplateExpression(node, ctx) {
 							const tag = node.tag
 							const quasi = node.quasi
-							const labelContext = labelContextStack[labelContextStack.length - 1]
 
-							// --- css`...` / keyframes`...` ---
+							// --- tw`...` / tx`...` ---
 							if (tag.type === "Identifier") {
 								const meta = importMap.get(tag.name)
-								if (
-									meta?.type === "named" &&
-									(meta.kind === ExprKind.Tw || meta.kind === ExprKind.Tx)
-								) {
-									const kind = meta.kind
+								if (meta?.type !== "named") {
+									return
+								}
+
+								const kind = meta.kind
+								if (kind === ExprKind.Tw || kind === ExprKind.Tx || kind === ExprKind.Theme) {
+									const input = getValue(quasi)
+									if (!input) {
+										return
+									}
+
+									const data = addData(kind, input)
+
 									ctx.record({
 										name: tag.name,
 										node,
@@ -171,21 +232,14 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 											nodeEnd: node.end,
 											isFullReplace: true,
 											apply: () => {
-												// const args = buildTaggedTemplateArgs(
-												// 	quasi,
-												// 	wasInJsx,
-												// 	labelContext,
-												// 	node.start,
-												// 	kind,
-												// )
-												const styleText = getValue(quasi)
-												if (styleText != null) {
-													const v = context.css(styleText)
-
-													let p = JSON.stringify(v)
-
-													console.log(s.slice(node.start, node.end), p)
-													s.update(node.start, node.end, p)
+												switch (kind) {
+													case ExprKind.Tw:
+														s.update(node.start, node.end, `css(${data})`)
+														return
+													case ExprKind.Tx:
+													case ExprKind.Theme:
+														s.update(node.start, node.end, data)
+														return
 												}
 											},
 										},
