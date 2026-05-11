@@ -6,6 +6,7 @@ import { readFileSync, existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { TwobjPluginOptions } from "../src/types.ts"
+import tailwindConfig from "../tailwind.config.ts"
 
 // https://playground.oxc.rs/
 
@@ -53,6 +54,7 @@ async function transform(code: string, options: TwobjPluginOptions, filename = "
 				},
 			},
 			twobjPlugin({
+				tailwindConfig,
 				...options,
 			}),
 		],

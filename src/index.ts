@@ -1,4 +1,6 @@
 import type { Plugin } from "rolldown"
+import { pathToFileURL } from "node:url"
+import path from "node:path"
 import { ScopedVisitor } from "oxc-unshadowed-visitor"
 import { Visitor, type ESTree } from "rolldown/utils"
 import { createImportMap, expandImportMap } from "./import-map.js"
@@ -12,6 +14,8 @@ import {
 	maybeComma,
 } from "./common.js"
 import { withMagicString } from "rolldown-string"
+import { createContext, resolveConfig } from "twobj"
+import type * as twobj from "twobj"
 
 interface RecordData {
 	nodeStart: number
@@ -24,13 +28,16 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 	let isDev = false
 	const registeredImports = expandImportMap()
 
+	const tailwindConfig = resolveConfig(options.tailwindConfig ?? {})
+	const context = createContext(tailwindConfig)
+
 	return {
 		name: "rolldown-plugin-twobj",
 		// @ts-expect-error Vite-specific property
 		enforce: "pre",
 
 		// @ts-expect-error Vite-specific hook
-		configResolved(config) {
+		async configResolved(config) {
 			isDev = !config.isProduction
 		},
 
@@ -78,6 +85,8 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 				})
 
 				const records = sv.walk(program)
+
+				console.log(context.css("bg-black"))
 
 				return
 			}),
