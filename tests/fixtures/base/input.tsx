@@ -1,9 +1,10 @@
 import { globalStyles, theme, tw, tx, wrap } from "twobj"
-
+import { css } from "@emotion/react"
 globalStyles
 
 tw`divide-black`
 tx`flex items-center font-bold text-lg after:text-cyan-400`
+theme`fontFamily.mono`
 
 wrap`(hover: focus:):`
 

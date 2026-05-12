@@ -15,6 +15,9 @@ const OFFICIAL_LIBRARIES: LibImportMap = {
 	"@emotion/react": {
 		css: ExprKind.EmotionCss,
 	},
+	"@emotion/styled": {
+		default: ExprKind.EmotionStyled,
+	},
 }
 
 export function expandImportMap(): LibImportMap {
@@ -49,6 +52,11 @@ export function createImportMap(registeredImports: LibImportMap): ImportMap {
 				if (spec.type === "ImportSpecifier") {
 					const importedName = spec.imported.type === "Identifier" ? spec.imported.name : spec.imported.value
 					const kind = config[importedName]
+					if (kind !== undefined) {
+						importPackages.set(spec.local.name, { type: "named", kind })
+					}
+				} else if (spec.type === "ImportDefaultSpecifier") {
+					const kind = config.default
 					if (kind !== undefined) {
 						importPackages.set(spec.local.name, { type: "named", kind })
 					}

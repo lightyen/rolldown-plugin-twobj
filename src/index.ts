@@ -14,23 +14,74 @@ import {
 	maybeComma,
 } from "./common.js"
 import { withMagicString } from "rolldown-string"
-import { createContext, resolveConfig } from "twobj"
-import type * as twobj from "twobj"
+import { createContext, CSSProperties, resolveConfig } from "twobj"
 
-interface RecordData {
-	nodeStart: number
-	nodeEnd: number
-	isFullReplace: boolean
-	apply: (getTarget: () => string) => void
+type TextRange = [number, number]
+
+type RangeLike = TextRange | { start: number; end: number }
+
+const enum TransformedKind {
+	String = 1,
+	CssParts,
+	WrapCallExpr,
+	StyledCallExpr,
 }
 
-function getValue(node: ESTree.TemplateLiteral): string | null {
+type Transformed = TransformedString | TransformedCssParts | TransformedWrapCallExpr
+
+interface TransformedString {
+	kind: TransformedKind.String
+	value: string
+}
+
+interface TransformedCssParts {
+	kind: TransformedKind.CssParts
+	value: string
+	parts: TextRange[]
+	append: boolean
+	tw: TextRange
+}
+
+interface TransformedWrapCallExpr {
+	kind: TransformedKind.WrapCallExpr
+	callee: string
+	arguments: TextRange[]
+}
+
+interface TransformedStyledCallExpr {
+	kind: TransformedKind.StyledCallExpr
+	callee: string
+	arguments: TextRange[]
+}
+
+interface RecordData {
+	start: number
+	end: number
+	transform(): Transformed
+}
+
+interface AdvancedRecordData {
+	node: RecordData
+	children?: Set<AdvancedRecordData>
+}
+
+function rangeIn(target: RangeLike, g: RangeLike): boolean {
+	const ts = target instanceof Array ? target[0] : target.start
+	const te = target instanceof Array ? target[1] : target.end
+	const gs = g instanceof Array ? g[0] : g.start
+	const ge = g instanceof Array ? g[1] : g.end
+	return ts >= gs && te <= ge
+}
+
+function getQuasiValue(node: ESTree.TemplateLiteral): string {
 	const n = node.quasis[0]
 	if (n == null) {
-		return null
+		return ""
 	}
 	return n.value.cooked ?? n.value.raw
 }
+
+const eRegex = new RegExp(`${Math.E.toString().replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}`, "g")
 
 export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 	let isDev = false
@@ -77,7 +128,6 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 				const fileStem = path.basename(id, path.extname(id))
 				const dirName = path.basename(path.dirname(id))
 
-				let targetCount = 0
 				const importMap = createImportMap(registeredImports)
 
 				for (const node of program.body) {
@@ -88,11 +138,56 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 
 				const trackedNames = importMap.getTrackedNames()
 
-				console.log(trackedNames)
-
+				let needEmotionCss = false
+				let needEmotionStyled = false
 				let dataIndex = 0
 				const cached = new Map<string, number>()
-				const data: unknown[] = []
+
+				interface Item {
+					kind: ExprKind
+					data: unknown
+				}
+				const dataArray: (Item | null)[] = []
+
+				function jsxAttributeValue(node: ESTree.JSXAttribute | null): string {
+					if (!node) {
+						return ""
+					}
+					const value = node.value
+					if (!value) {
+						return ""
+					}
+					if (value.type === "Literal") {
+						return value.value
+					}
+					if (
+						value.type === "JSXExpressionContainer" &&
+						value.expression.type === "Literal" &&
+						typeof value.expression.value === "string"
+					) {
+						return value.expression.value
+					}
+					return ""
+				}
+
+				function jsxCssExpr(node: ESTree.JSXAttribute | null): [number, number][] {
+					if (!node) {
+						return []
+					}
+					const value = node.value
+					if (!value) {
+						return []
+					}
+					if (value.type === "JSXExpressionContainer") {
+						if (value.expression.type === "ArrayExpression") {
+							return value.expression.elements
+								.filter(e => !!e)
+								.map<TextRange>(({ start, end }) => [start, end])
+						}
+						return [[value.expression.start, value.expression.end]]
+					}
+					return []
+				}
 
 				function addData(kind: ExprKind, input: string): string {
 					let i = cached.get(input)
@@ -101,114 +196,183 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						cached.set(input, i)
 						switch (kind) {
 							case ExprKind.Tw:
+								dataArray[i] = { kind, data: tw.css(input) }
+								needEmotionCss = true
+								break
 							case ExprKind.Tx:
-								data[i] = tw.css(input)
+								dataArray[i] = { kind, data: tw.css(input) }
 								break
 							case ExprKind.Theme:
-								data[i] = tw.theme(input)
+								dataArray[i] = { kind, data: buildTheme(tw.theme(input)) }
 								break
 							case ExprKind.Wrap:
+								dataArray[i] = { kind, data: tw.wrap(input)(Math.E as unknown as CSSProperties) }
+								break
+							case ExprKind.EmotionStyled:
+								needEmotionStyled = true
+								break
 							default:
-								data[i] = null
+								dataArray[i] = null
 						}
 						dataIndex += 1
 					}
 					return `_tw[${i}]`
 				}
 
-				const labelContextStack: (string | null)[] = [null]
-				let inJsx = false
 				const sv = new ScopedVisitor<RecordData>({
 					trackedNames,
 					walk: (program, visitor) => new Visitor(visitor).visit(program),
 					visitor: {
 						Program(node, ctx) {
 							let hasEmotionCss = false
-							const meta = importMap.get("css")
+							let hasEmotionStyled = false
+
+							let meta = importMap.get("css")
 							if (meta?.type === "named" && meta.kind === ExprKind.EmotionCss) {
 								hasEmotionCss = true
+							}
+
+							meta = importMap.get("styled")
+							if (meta?.type === "named" && meta.kind === ExprKind.EmotionStyled) {
+								hasEmotionStyled = true
 							}
 
 							ctx.record({
 								name: "tw",
 								node,
 								data: {
-									nodeStart: node.start,
-									nodeEnd: node.end,
-									isFullReplace: false,
-									apply: () => {
-										if (!hasEmotionCss) {
-											s.appendLeft(
-												0,
-												`import { css } from "@emotion/react";\nconst _tw = ${JSON.stringify(data)};`,
-											)
-										} else {
-											s.appendLeft(0, `const _tw = ${JSON.stringify(data)};`)
+									start: 0,
+									end: 0,
+									transform: () => {
+										let value = "const _tw = [];"
+										if (needEmotionCss && !hasEmotionCss) {
+											value = `import { css } from "@emotion/react";\n` + value
 										}
+										if (needEmotionStyled && !hasEmotionStyled) {
+											value = `import styled from "@emotion/styled";\n` + value
+										}
+										for (let i = 0; i < dataArray.length; i++) {
+											const item = dataArray[i]
+											if (item) {
+												let result = JSON.stringify(item.data)
+												if (item.kind === ExprKind.Tw) {
+													result = `css(${result})`
+												} else if (item.kind === ExprKind.Wrap) {
+													result = `(e)=>(${result.replace(eRegex, "e")})`
+												}
+												value = value + `_tw[${i}] = ${result};`
+											} else {
+												value = value + `_tw[${i}] = null;`
+											}
+										}
+										return { kind: TransformedKind.String, value }
 									},
 								},
 							})
 						},
-						VariableDeclarator(node) {
-							let ctx = null
-							if (node.id.type === "Identifier") {
-								ctx = node.id.name
+
+						/**
+						 * <div tw="bg-black" /> ==> <div css={_tw[<i>]} />
+						 */
+						JSXElement(node, ctx) {
+							const opening = node.openingElement
+							let tw: ESTree.JSXAttribute | undefined
+							let css: ESTree.JSXAttribute | undefined
+
+							for (const attr of opening.attributes) {
+								if (attr.type === "JSXAttribute") {
+									if (attr.name.name === "tw") {
+										tw ??= attr
+									}
+									if (attr.name.name === "css") {
+										css ??= attr
+									}
+								}
+								if (tw && css) {
+									break
+								}
 							}
-							// Named function expression overrides variable name
-							if (node.init?.type === "FunctionExpression" && node.init.id) {
-								ctx = node.init.id.name
+
+							if (!tw) {
+								return
 							}
-							labelContextStack.push(ctx)
-						},
-						"VariableDeclarator:exit"() {
-							labelContextStack.pop()
-						},
 
-						FunctionDeclaration(node) {
-							// Function declarations always have an id
-							labelContextStack.push(node.id!.name)
-						},
-						"FunctionDeclaration:exit"() {
-							labelContextStack.pop()
-						},
+							if (!css) {
+								// <div tw="bg-black" /> ==> <div css={_tw[<i>]} />
+								const input = jsxAttributeValue(tw)
+								if (!input) {
+									return
+								}
 
-						Property(node) {
-							let ctx = null
-							if (!node.computed) {
-								if (node.key.type === "Identifier") ctx = node.key.name
-								else if (node.key.type === "Literal" && typeof node.key.value === "string")
-									ctx = node.key.value
+								const data = addData(ExprKind.Tw, input)
+								const [start, end] = [tw.start, tw.end]
+								ctx.record({
+									name: "tw",
+									node,
+									data: {
+										start: start,
+										end: end,
+										transform: () => ({ kind: TransformedKind.String, value: `css={${data}}` }),
+									},
+								})
+								return
 							}
-							labelContextStack.push(ctx)
-						},
-						"Property:exit"() {
-							labelContextStack.pop()
-						},
 
-						ClassDeclaration(node) {
-							const name = node.id?.name ?? labelContextStack[labelContextStack.length - 1]
-							labelContextStack.push(name)
-						},
-						"ClassDeclaration:exit"() {
-							labelContextStack.pop()
-						},
-
-						PropertyDefinition(node) {
-							let ctx = labelContextStack[labelContextStack.length - 1]
-							if (node.key.type === "Identifier" && !node.computed) {
-								ctx = node.key.name
+							// <div tw="bg-black" css={} /> ==> <div css={[_tw[<i>], ...]} />
+							const input = jsxAttributeValue(tw)
+							if (!input) {
+								return
 							}
-							labelContextStack.push(ctx)
-						},
-						"PropertyDefinition:exit"() {
-							labelContextStack.pop()
-						},
 
+							const [tw_start, tw_end] = [tw.start, tw.end]
+							const [css_start, css_end] = [css.start, css.end]
+							const css_content = jsxCssExpr(css)
+							const data = addData(ExprKind.Tw, input)
+							ctx.record({
+								name: "tw",
+								node,
+								data: {
+									start: css_start,
+									end: css_end,
+									transform: () => {
+										return {
+											kind: TransformedKind.CssParts,
+											value: data,
+											parts: css_content,
+											append: tw_start > css_start,
+											tw: [tw_start, tw_end],
+										} satisfies TransformedCssParts
+									},
+								},
+							})
+						},
+						CallExpression(node, ctx) {
+							if (
+								node.callee.type !== "TaggedTemplateExpression" ||
+								node.callee.tag.type !== "Identifier"
+							) {
+								return
+							}
+
+							const meta = importMap.get(node.callee.tag.name)
+							if (meta?.type !== "named") {
+								return
+							}
+
+							const kind = meta.kind
+							if (kind === ExprKind.Wrap) {
+								node.callee.parent = node
+							}
+						},
+						// --- tw`...` / tx`...` ---
+						// tw`` => css({...})
+						// tx`` => {...}
+						// theme`` => ...
+						// wrap``(payload) ==> ((e) => ({...}))(payload)
 						TaggedTemplateExpression(node, ctx) {
 							const tag = node.tag
 							const quasi = node.quasi
 
-							// --- tw`...` / tx`...` ---
 							if (tag.type === "Identifier") {
 								const meta = importMap.get(tag.name)
 								if (meta?.type !== "named") {
@@ -216,178 +380,68 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 								}
 
 								const kind = meta.kind
-								if (kind === ExprKind.Tw || kind === ExprKind.Tx || kind === ExprKind.Theme) {
-									const input = getValue(quasi)
-									if (!input) {
+
+								if (kind === ExprKind.Wrap) {
+									const input = getQuasiValue(quasi)
+									const data = addData(ExprKind.Wrap, input)
+
+									if (node.parent?.type === "CallExpression") {
+										const call_expr = node.parent
+										const args = call_expr.arguments.map<TextRange>(({ start, end }) => [
+											start,
+											end,
+										])
+										ctx.record({
+											name: "wrap",
+											node: call_expr,
+											data: {
+												start: call_expr.start,
+												end: call_expr.end,
+												transform: () => {
+													return {
+														kind: TransformedKind.WrapCallExpr,
+														callee: data,
+														arguments: args,
+													} satisfies TransformedWrapCallExpr
+												},
+											},
+										})
 										return
 									}
+								}
 
+								if (
+									kind === ExprKind.Tw ||
+									kind === ExprKind.Tx ||
+									kind === ExprKind.Theme ||
+									ExprKind.Wrap
+								) {
+									const input = getQuasiValue(quasi)
 									const data = addData(kind, input)
-
 									ctx.record({
 										name: tag.name,
 										node,
 										data: {
-											nodeStart: node.start,
-											nodeEnd: node.end,
-											isFullReplace: true,
-											apply: () => {
-												switch (kind) {
-													case ExprKind.Tw:
-														s.update(node.start, node.end, `css(${data})`)
-														return
-													case ExprKind.Tx:
-													case ExprKind.Theme:
-														s.update(node.start, node.end, data)
-														return
-												}
-											},
+											start: node.start,
+											end: node.end,
+											transform: () => ({ kind: TransformedKind.String, value: data }),
 										},
 									})
 									return
 								}
+
+								return
 							}
 
-							// --- styled.div`...` / namespace.css`...` ---
-							// if (tag.type === "MemberExpression" && !tag.computed && tag.object.type === "Identifier") {
-							// 	const meta = importMap.get(tag.object.name)
-							// 	if (meta?.type === "named" && meta.kind === ExprKind.Styled) {
-							// 		ctx.record({
-							// 			name: tag.object.name,
-							// 			node,
-							// 			data: {
-							// 				nodeStart: node.start,
-							// 				nodeEnd: node.end,
-							// 				isFullReplace: true,
-							// 				apply: getTarget => {
-							// 					let labelObj = `target: "${getTarget()}"`
-							// 					if (shouldAddLabel()) {
-							// 						const label = createLabel(labelContext, false)
-							// 						labelObj += `, label: "${escapeJSString(label)}"`
-							// 					}
+							// tw.input`` ==> styled.input({...})
+							if (tag.type === "MemberExpression") {
+								return
+							}
 
-							// 					const styledArgs = buildTaggedTemplateArgs(
-							// 						quasi,
-							// 						false,
-							// 						labelContext,
-							// 						node.start,
-							// 						ExprKind.Css,
-							// 						false,
-							// 					)
-							// 					const styledName = s.slice(tag.object.start, tag.object.end)
-							// 					const propName = tag.property.name
-							// 					s.update(
-							// 						node.start,
-							// 						node.end,
-							// 						`${styledName}("${escapeJSString(propName)}", {\n${labelObj}\n})(${styledArgs})`,
-							// 					)
-							// 					s.appendLeft(node.start, "/* @__PURE__ */ ")
-							// 				},
-							// 			},
-							// 		})
-							// 		return
-							// 	}
-
-							// 	// --- namespace.css`...` / namespace.keyframes`...` ---
-							// 	if (meta?.type === "namespace") {
-							// 		const propName = tag.property.type === "Identifier" ? tag.property.name : null
-							// 		const propKind = propName ? meta.config[propName] : undefined
-							// 		if (propKind !== ExprKind.Css && propKind !== ExprKind.Keyframes) return
-
-							// 		const kind = propKind
-							// 		let wasInJsx = inJsx
-							// 		ctx.record({
-							// 			name: tag.object.name,
-							// 			node,
-							// 			data: {
-							// 				nodeStart: node.start,
-							// 				nodeEnd: node.end,
-							// 				isFullReplace: true,
-							// 				apply: () => {
-							// 					const tagText = s.slice(tag.start, tag.end)
-							// 					const args = buildTaggedTemplateArgs(
-							// 						quasi,
-							// 						wasInJsx,
-							// 						labelContext,
-							// 						node.start,
-							// 						kind,
-							// 					)
-							// 					s.update(node.start, node.end, `${tagText}(${args})`)
-							// 					s.appendLeft(node.start, "/* @__PURE__ */ ")
-							// 				},
-							// 			},
-							// 		})
-							// 		return
-							// 	}
-							// }
-
-							// --- styled(Component)`...` ---
-							// if (tag.type === "CallExpression" && tag.callee.type === "Identifier") {
-							// 	const meta = importMap.get(tag.callee.name)
-							// 	if (meta?.type === "named" && meta.kind === ExprKind.Styled) {
-							// 		ctx.record({
-							// 			name: tag.callee.name,
-							// 			node,
-							// 			data: {
-							// 				nodeStart: node.start,
-							// 				nodeEnd: node.end,
-							// 				isFullReplace: true,
-							// 				apply: getTarget => {
-							// 					const styledName = s.slice(tag.callee.start, tag.callee.end)
-							// 					const target = getTarget()
-							// 					let labelObj = `target: "${target}"`
-							// 					if (shouldAddLabel()) {
-							// 						const label = createLabel(labelContext, false)
-							// 						labelObj += `, label: "${escapeJSString(label)}"`
-							// 					}
-
-							// 					// Extract existing args from styled(Component, ...)
-							// 					const existingArgs = tag.arguments
-							// 					const firstArgText =
-							// 						existingArgs.length > 0
-							// 							? s.slice(existingArgs[0].start, existingArgs[0].end)
-							// 							: ""
-
-							// 					let innerCallText: string
-							// 					if (existingArgs.length <= 1) {
-							// 						// styled(Component) → styled(Component, { target, label })
-							// 						innerCallText = `${styledName}(${firstArgText}, {\n${labelObj}\n})`
-							// 					} else {
-							// 						// styled(Component, options) → need to merge options
-							// 						const secondArg = existingArgs[1]
-							// 						if (secondArg.type === "ObjectExpression") {
-							// 							// Merge target/label into existing object
-							// 							const objText = s.slice(secondArg.start + 1, secondArg.end - 1)
-							// 							const isEmpty = objText.trim() === ""
-							// 							const hasTrailingComma =
-							// 								!isEmpty && objText.trimEnd().endsWith(",")
-							// 							const prefix = isEmpty
-							// 								? ""
-							// 								: `${objText}${maybeComma(!hasTrailingComma)} `
-							// 							innerCallText = `${styledName}(${firstArgText}, { ${prefix}${labelObj} })`
-							// 						} else {
-							// 							// Wrap with spread
-							// 							const secondArgText = s.slice(secondArg.start, secondArg.end)
-							// 							innerCallText = `${styledName}(${firstArgText}, {\n${labelObj},\n\t...${secondArgText}\n})`
-							// 						}
-							// 					}
-
-							// 					const styledArgs = buildTaggedTemplateArgs(
-							// 						quasi,
-							// 						false,
-							// 						labelContext,
-							// 						node.start,
-							// 						ExprKind.Css,
-							// 						false,
-							// 					)
-							// 					s.update(node.start, node.end, `${innerCallText}(${styledArgs})`)
-							// 					s.appendLeft(node.start, "/* @__PURE__ */ ")
-							// 				},
-							// 			},
-							// 		})
-							// 		return
-							// 	}
-							// }
+							// tw("input")`` ==> styled("input")({...})
+							if (tag.type === "CallExpression") {
+								return
+							}
 						},
 					},
 				})
@@ -398,19 +452,110 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					return
 				}
 
-				const consumedRanges: [number, number][] = []
-				for (const record of records) {
-					const { nodeStart, nodeEnd, isFullReplace, apply } = record.data
-					// Skip records fully contained within an already-consumed range
-					// (e.g., inner tagged template inside an outer one that was replaced)
-					if (consumedRanges.some(([cs, ce]) => nodeStart >= cs && nodeEnd <= ce)) {
-						continue
+				const root: AdvancedRecordData = {
+					node: {
+						start: 0,
+						end: s.length(),
+						transform: () => ({ kind: TransformedKind.String, value: "" }),
+					},
+				}
+
+				function insert(target: RecordData, e: AdvancedRecordData): boolean {
+					const { start, end } = target
+					if (start < e.node.start || end > e.node.end) {
+						return false
 					}
 
-					apply(() => `e${targetCount++}`)
+					if (!e.children) {
+						e.children = new Set([{ node: target }])
+						return true
+					}
 
-					if (isFullReplace) {
-						consumedRanges.push([nodeStart, nodeEnd])
+					for (const child of e.children) {
+						if (insert(target, child)) {
+							return true
+						}
+					}
+
+					const children = new Set<AdvancedRecordData>()
+					for (const c of e.children) {
+						if (c.node.start >= start && c.node.end <= end) {
+							children.add(c)
+							e.children.delete(c)
+						}
+					}
+
+					e.children.add({ node: target, children })
+					return true
+				}
+
+				for (const record of records) {
+					const data = record.data
+					insert(data, root)
+				}
+
+				function render(e: AdvancedRecordData): [Transformed, string] {
+					const t = e.node.transform()
+					if (t.kind === TransformedKind.String) {
+						return [t, t.value]
+					}
+
+					if (t.kind === TransformedKind.CssParts) {
+						const parts = t.parts.map(([a, b]) => s.slice(a, b))
+
+						if (e.children) {
+							for (const c of e.children) {
+								const index = t.parts.findIndex(p => rangeIn(c.node, p))
+								if (index !== -1) {
+									const [_, inner] = render(c)
+									parts[index] =
+										s.slice(t.parts[index][0], c.node.start) +
+										inner +
+										s.slice(c.node.end, t.parts[index][1])
+								}
+							}
+						}
+
+						if (t.append) {
+							parts.push(t.value)
+						} else {
+							parts.unshift(t.value)
+						}
+						return [t, `css={[${parts.join(",")}]}`]
+					}
+
+					const args = t.arguments.map(([a, b]) => s.slice(a, b))
+
+					if (e.children) {
+						for (const c of e.children) {
+							const index = t.arguments.findIndex(p => rangeIn(c.node, p))
+							if (index !== -1) {
+								const [_, inner] = render(c)
+								args[index] =
+									s.slice(t.arguments[index][0], c.node.start) +
+									inner +
+									s.slice(c.node.end, t.arguments[index][1])
+							}
+						}
+					}
+
+					return [t, `${t.callee}(${args.join(",")})`]
+				}
+
+				if (root.children) {
+					for (const c of root.children) {
+						const [t, value] = render(c)
+
+						if (t.kind === TransformedKind.CssParts) {
+							s.remove(...t.tw)
+						}
+
+						const { start, end } = c.node
+						if (start === end) {
+							s.prependRight(start, value)
+						} else {
+							s.update(start, end, value)
+						}
 					}
 				}
 
@@ -418,4 +563,11 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 			}),
 		},
 	}
+}
+
+function buildTheme(value: unknown): unknown {
+	if (Array.isArray(value) && value.every(v => typeof v === "string")) {
+		return value.join(", ")
+	}
+	return value
 }
