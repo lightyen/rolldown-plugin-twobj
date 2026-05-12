@@ -4,14 +4,7 @@ import { ScopedVisitor } from "oxc-unshadowed-visitor"
 import { Visitor, type ESTree } from "rolldown/utils"
 import { createImportMap, expandImportMap } from "./import-map.js"
 import type { TwobjPluginOptions } from "./types.js"
-import {
-	ExprKind,
-	regexEscape,
-	unescapeTemplateRaw,
-	escapeJSString,
-	checkTrailingCommaExistence,
-	maybeComma,
-} from "./common.js"
+import { ExprKind, regexEscape } from "./common.js"
 import { withMagicString } from "rolldown-string"
 import { createContext, CSSProperties, resolveConfig } from "twobj"
 
@@ -26,7 +19,7 @@ const enum TransformedKind {
 	StyledCallExpr,
 }
 
-type Transformed = TransformedString | TransformedCssParts | TransformedWrapCallExpr
+type Transformed = TransformedString | TransformedCssParts | TransformedWrapCallExpr | TransformedStyledCallExpr
 
 interface TransformedString {
 	kind: TransformedKind.String
@@ -50,7 +43,7 @@ interface TransformedWrapCallExpr {
 interface TransformedStyledCallExpr {
 	kind: TransformedKind.StyledCallExpr
 	callee: string
-	arguments: TextRange[]
+	value: string
 }
 
 interface RecordData {
@@ -144,6 +137,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 				let needEmotionStyled = false
 				let dataIndex = 0
 				const cached = new Map<string, number>()
+				const header: { transform(): string } = { transform: () => "" }
 
 				interface Item {
 					kind: ExprKind
@@ -191,6 +185,13 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					return []
 				}
 
+				function buildTheme(value: unknown): unknown {
+					if (Array.isArray(value) && value.every(v => typeof v === "string")) {
+						return value.join(", ")
+					}
+					return value
+				}
+
 				function addData(kind: ExprKind, input: string): string {
 					let i = cached.get(input)
 					if (i == undefined) {
@@ -236,40 +237,33 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 								importMap.get("css")?.decl.end ?? 0,
 								importMap.get("styled")?.decl.end ?? 0,
 							)
-							ctx.record({
-								name: "tw",
-								node,
-								data: {
-									start: index,
-									end: index,
-									transform: () => {
-										let value = "\n"
-										if (needEmotionCss && !hasEmotionCss) {
-											value += `import { css } from "@emotion/react";\n`
-										}
-										if (needEmotionStyled && !hasEmotionStyled) {
-											value += `import styled from "@emotion/styled";\n`
-										}
 
-										value += "const _tw = [];\n"
-										for (let i = 0; i < dataArray.length; i++) {
-											const item = dataArray[i]
-											if (item) {
-												let result = JSON.stringify(item.data)
-												if (item.kind === ExprKind.Tw) {
-													result = `css(${result})`
-												} else if (item.kind === ExprKind.Wrap) {
-													result = `(e)=>(${result.replace(eRegex, "e")})`
-												}
-												value = value + `_tw[${i}] = ${result};\n`
-											} else {
-												value = value + `_tw[${i}] = null;\n`
-											}
+							header.transform = () => {
+								let value = "\n"
+								if (needEmotionCss && !hasEmotionCss) {
+									value += `import { css } from "@emotion/react";\n`
+								}
+								if (needEmotionStyled && !hasEmotionStyled) {
+									value += `import styled from "@emotion/styled";\n`
+								}
+
+								value += "const _tw = [];\n"
+								for (let i = 0; i < dataArray.length; i++) {
+									const item = dataArray[i]
+									if (item) {
+										let result = JSON.stringify(item.data)
+										if (item.kind === ExprKind.Tw) {
+											result = `css(${result})`
+										} else if (item.kind === ExprKind.Wrap) {
+											result = `(e)=>(${result.replace(eRegex, "e")})`
 										}
-										return { kind: TransformedKind.String, value }
-									},
-								},
-							})
+										value = value + `_tw[${i}] = ${result};\n`
+									} else {
+										value = value + `_tw[${i}] = null;\n`
+									}
+								}
+								return value
+							}
 						},
 						ImportDeclaration(node, ctx) {
 							if (node.source.value !== "twobj") return
@@ -409,14 +403,38 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						},
 						CallExpression(node, ctx) {
 							if (
-								node.callee.type !== "TaggedTemplateExpression" ||
-								node.callee.tag.type !== "Identifier"
+								node.callee.type === "TaggedTemplateExpression" &&
+								node.callee.tag.type === "Identifier"
 							) {
+								const meta = importMap.get(node.callee.tag.name)
+								if (meta?.kind === ExprKind.Wrap) {
+									node.callee.parent = node
+									return
+								}
+
 								return
 							}
 
-							if (importMap.get(node.callee.tag.name)?.kind === ExprKind.Wrap) {
-								node.callee.parent = node
+							// tw(Component)() ==> styled(Component)()
+							if (node.callee.type === "Identifier") {
+								const name = node.callee.name
+								const meta = importMap.get(name)
+								if (meta?.kind !== ExprKind.Tw) return
+
+								needEmotionStyled = true
+								ctx.record({
+									node: node.callee,
+									name,
+									data: {
+										start: node.callee.start,
+										end: node.callee.end,
+										transform() {
+											return { kind: TransformedKind.String, value: "styled" }
+										},
+									},
+								})
+
+								return
 							}
 						},
 						/**
@@ -561,13 +579,68 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 								return
 							}
 
-							// tw.input`` ==> styled.input({...})
+							// tw.input`` ==> styled.input({...}) StyledCallExpr
 							if (tag.type === "MemberExpression") {
+								if (tag.object.type !== "Identifier" || tag.property.type !== "Identifier") return
+								const kind = importMap.get(tag.object.name)?.kind
+								if (!kind) {
+									return
+								}
+
+								const property = tag.property.name
+								const input = getQuasiValue(quasi)
+								const data = addData(ExprKind.Tx, input)
+
+								needEmotionStyled = true
+								ctx.record({
+									name: "tw",
+									node,
+									data: {
+										start: node.start,
+										end: node.end,
+										transform: () => {
+											return {
+												kind: TransformedKind.StyledCallExpr,
+												callee: "styled." + property,
+												value: data,
+											} as TransformedStyledCallExpr
+										},
+									},
+								})
 								return
 							}
 
-							// tw("input")`` ==> styled("input")({...})
+							// tw("input")`` ==> styled("input")({...}) StyledCallExpr
+							// tw(Component)`` ==> styled(Component)({...}) StyledCallExpr
 							if (tag.type === "CallExpression") {
+								if (tag.callee.type !== "Identifier") return
+								const kind = importMap.get(tag.callee.name)?.kind
+								if (!kind) {
+									return
+								}
+
+								const callee_start = tag.start + tag.callee.name.length
+								const callee_end = tag.end
+								const input = getQuasiValue(quasi)
+								const data = addData(ExprKind.Tx, input)
+
+								needEmotionStyled = true
+								ctx.record({
+									name: "tw",
+									node,
+									data: {
+										start: node.start,
+										end: node.end,
+										transform: () => {
+											return {
+												kind: TransformedKind.StyledCallExpr,
+												callee: "styled" + s.slice(callee_start, callee_end),
+												value: data,
+											} as TransformedStyledCallExpr
+										},
+									},
+								})
+
 								return
 							}
 						},
@@ -652,25 +725,30 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						return [t, `css={[${parts.join(",")}]}`]
 					}
 
-					const args = t.arguments.map(([a, b]) => s.slice(a, b))
+					if (t.kind === TransformedKind.WrapCallExpr) {
+						const args = t.arguments.map(([a, b]) => s.slice(a, b))
 
-					if (e.children) {
-						for (const c of e.children) {
-							const index = t.arguments.findIndex(p => rangeIn(c.node, p))
-							if (index !== -1) {
-								const [_, inner] = render(c)
-								args[index] =
-									s.slice(t.arguments[index][0], c.node.start) +
-									inner +
-									s.slice(c.node.end, t.arguments[index][1])
+						if (e.children) {
+							for (const c of e.children) {
+								const index = t.arguments.findIndex(p => rangeIn(c.node, p))
+								if (index !== -1) {
+									const [_, inner] = render(c)
+									args[index] =
+										s.slice(t.arguments[index][0], c.node.start) +
+										inner +
+										s.slice(c.node.end, t.arguments[index][1])
+								}
 							}
 						}
+
+						return [t, `${t.callee}(${args.join(",")})`]
 					}
 
-					return [t, `${t.callee}(${args.join(",")})`]
+					return [t, `${t.callee}(${t.value})`]
 				}
 
 				if (root.children) {
+					s.prependLeft(0, header.transform())
 					for (const c of root.children) {
 						const [t, value] = render(c)
 
@@ -679,9 +757,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						}
 
 						const { start, end } = c.node
-						if (start === end) {
-							s.appendRight(start, value)
-						} else {
+						if (start !== end) {
 							s.update(start, end, value)
 						}
 					}
@@ -691,11 +767,4 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 			}),
 		},
 	}
-}
-
-function buildTheme(value: unknown): unknown {
-	if (Array.isArray(value) && value.every(v => typeof v === "string")) {
-		return value.join(", ")
-	}
-	return value
 }

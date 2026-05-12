@@ -29,10 +29,9 @@ const style = {
 }
 
 const Styled1 = tw(Header)(style.a, style.b)
-
-const Styled2 = tw.input`hidden`
-
+const Styled2 = tw(Header)``
 const Styled3 = tw("input")`hidden`
+const Styled4 = tw.input`hidden`
 
 export function G() {
 	return (

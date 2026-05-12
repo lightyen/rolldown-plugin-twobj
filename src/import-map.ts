@@ -1,6 +1,5 @@
 import type { ESTree } from "rolldown/utils"
 import { ExprKind } from "./common"
-import type { ImportMapConfig } from "./types"
 
 export type LibImportMap = Record</* moduleName */ string, Record</* exportName */ string, ExprKind>>
 
