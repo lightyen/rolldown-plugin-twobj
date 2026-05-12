@@ -1,6 +1,6 @@
 import { globalStyles, theme, tw, tx, wrap } from "twobj"
 import { css } from "@emotion/react"
-globalStyles
+const v = { ...globalStyles }
 
 tw`divide-black`
 tx`flex items-center font-bold text-lg after:text-cyan-400`
@@ -32,3 +32,7 @@ const Styled1 = tw(Header)(style.a, style.b)
 const Styled2 = tw.input`hidden`
 
 const Styled3 = tw("input")`hidden`
+
+const k1 = <Global styles={[globalStyles, appStyle]} />
+
+const k2 = <Global styles={globalStyles} />

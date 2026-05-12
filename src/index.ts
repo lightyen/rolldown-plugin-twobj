@@ -138,6 +138,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 
 				const trackedNames = importMap.getTrackedNames()
 
+				let globalStyles = false
 				let needEmotionCss = false
 				let needEmotionStyled = false
 				let dataIndex = 0
@@ -346,6 +347,39 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 								},
 							})
 						},
+						SpreadElement(node, ctx) {
+							if (globalStyles) return
+
+							if (node.argument.type === "Identifier" && node.argument.name === "globalStyles") {
+								ctx.record({
+									name: "globalStyles",
+									node,
+									data: {
+										start: 0,
+										end: 0,
+										transform: () => {
+											console.log("why")
+											let value = "const globalStyles = {};"
+											return { kind: TransformedKind.String, value }
+										},
+									},
+								})
+
+								globalStyles = true
+							}
+						},
+						VariableDeclarator(node, ctx) {
+							if (globalStyles) return
+
+							// const v1 = globalStyles
+							// const v2 = {...globalStyles}
+						},
+						JSXExpressionContainer(node, ctx) {
+							if (globalStyles) return
+
+							// <Global styles={[globalStyles, appStyle]} />
+							// <Global styles={globalStyles} />
+						},
 						CallExpression(node, ctx) {
 							if (
 								node.callee.type !== "TaggedTemplateExpression" ||
@@ -552,7 +586,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 
 						const { start, end } = c.node
 						if (start === end) {
-							s.prependRight(start, value)
+							s.appendRight(start, value)
 						} else {
 							s.update(start, end, value)
 						}
