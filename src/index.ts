@@ -1,5 +1,4 @@
 import type { Plugin } from "rolldown"
-import { pathToFileURL } from "node:url"
 import path from "node:path"
 import { ScopedVisitor } from "oxc-unshadowed-visitor"
 import { Visitor, type ESTree } from "rolldown/utils"
@@ -137,8 +136,10 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 				}
 
 				const trackedNames = importMap.getTrackedNames()
+				const hasEmotionCss = importMap.get("css")?.kind === ExprKind.EmotionCss
+				const hasEmotionStyled = importMap.get("styled")?.kind === ExprKind.EmotionStyled
+				const hasGlobalStyles = importMap.get("globalStyles")?.kind === ExprKind.GlobalStyles
 
-				let globalStyles = false
 				let needEmotionCss = false
 				let needEmotionStyled = false
 				let dataIndex = 0
@@ -196,6 +197,9 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						i = dataIndex
 						cached.set(input, i)
 						switch (kind) {
+							case ExprKind.GlobalStyles:
+								dataArray[i] = { kind, data: tw.globalStyles }
+								break
 							case ExprKind.Tw:
 								dataArray[i] = { kind, data: tw.css(input) }
 								needEmotionCss = true
@@ -225,33 +229,29 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					walk: (program, visitor) => new Visitor(visitor).visit(program),
 					visitor: {
 						Program(node, ctx) {
-							let hasEmotionCss = false
-							let hasEmotionStyled = false
+							let index = 0
 
-							let meta = importMap.get("css")
-							if (meta?.type === "named" && meta.kind === ExprKind.EmotionCss) {
-								hasEmotionCss = true
-							}
-
-							meta = importMap.get("styled")
-							if (meta?.type === "named" && meta.kind === ExprKind.EmotionStyled) {
-								hasEmotionStyled = true
-							}
-
+							index = Math.max(
+								index,
+								importMap.get("css")?.decl.end ?? 0,
+								importMap.get("styled")?.decl.end ?? 0,
+							)
 							ctx.record({
 								name: "tw",
 								node,
 								data: {
-									start: 0,
-									end: 0,
+									start: index,
+									end: index,
 									transform: () => {
-										let value = "const _tw = [];"
+										let value = "\n"
 										if (needEmotionCss && !hasEmotionCss) {
-											value = `import { css } from "@emotion/react";\n` + value
+											value += `import { css } from "@emotion/react";\n`
 										}
 										if (needEmotionStyled && !hasEmotionStyled) {
-											value = `import styled from "@emotion/styled";\n` + value
+											value += `import styled from "@emotion/styled";\n`
 										}
+
+										value += "const _tw = [];\n"
 										for (let i = 0; i < dataArray.length; i++) {
 											const item = dataArray[i]
 											if (item) {
@@ -261,9 +261,9 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 												} else if (item.kind === ExprKind.Wrap) {
 													result = `(e)=>(${result.replace(eRegex, "e")})`
 												}
-												value = value + `_tw[${i}] = ${result};`
+												value = value + `_tw[${i}] = ${result};\n`
 											} else {
-												value = value + `_tw[${i}] = null;`
+												value = value + `_tw[${i}] = null;\n`
 											}
 										}
 										return { kind: TransformedKind.String, value }
@@ -271,7 +271,154 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 								},
 							})
 						},
+						ImportDeclaration(node, ctx) {
+							if (node.source.value !== "twobj") return
 
+							interface Specifier {
+								imported: string
+								local: string
+							}
+
+							const specifiers: Specifier[] = []
+
+							for (const spec of node.specifiers) {
+								if (spec.type === "ImportSpecifier") {
+									const imported =
+										spec.imported.type === "Identifier" ? spec.imported.name : spec.imported.value
+									specifiers.push({ imported, local: spec.local.name })
+								}
+							}
+
+							const newSpecifiers = specifiers.filter(spec => !importMap.get(spec.local))
+
+							if (newSpecifiers.length === 0) {
+								ctx.record({
+									name: "tw",
+									node,
+									data: {
+										start: node.start,
+										end: node.end,
+										transform: () => ({ kind: TransformedKind.String, value: "" }),
+									},
+								})
+								return
+							}
+
+							const data = newSpecifiers.map(spec =>
+								spec.imported === spec.local ? spec.imported : `${spec.imported} as ${spec.local}`,
+							)
+
+							ctx.record({
+								name: "tw",
+								node,
+								data: {
+									start: node.start,
+									end: node.end,
+									transform: () => ({
+										kind: TransformedKind.String,
+										value: `import {${data.join(", ")}} from "twobj"`,
+									}),
+								},
+							})
+						},
+						SpreadElement(node, ctx) {
+							if (!hasGlobalStyles) return
+
+							if (node.argument.type !== "Identifier") return
+							const name = node.argument.name
+							const meta = importMap.get(name)
+							if (meta?.kind !== ExprKind.GlobalStyles) return
+
+							const p = node.argument
+							const data = addData(ExprKind.GlobalStyles, name)
+							ctx.record({
+								name,
+								node: p,
+								data: {
+									start: p.start,
+									end: p.end,
+									transform: () => ({ kind: TransformedKind.String, value: data }),
+								},
+							})
+						},
+						VariableDeclarator(node, ctx) {
+							if (!hasGlobalStyles) return
+
+							if (node.init?.type !== "Identifier") return
+
+							const name = node.init.name
+							const meta = importMap.get(name)
+							if (meta?.kind !== ExprKind.GlobalStyles) return
+
+							const p = node.init
+							const data = addData(ExprKind.GlobalStyles, name)
+							ctx.record({
+								name,
+								node: p,
+								data: {
+									start: p.start,
+									end: p.end,
+									transform: () => ({ kind: TransformedKind.String, value: data }),
+								},
+							})
+						},
+						// <Global styles={[globalStyles, appStyle]} />
+						ArrayExpression(node, ctx) {
+							if (!hasGlobalStyles) return
+
+							for (const e of node.elements) {
+								if (e?.type !== "Identifier") continue
+								const name = e.name
+								const meta = importMap.get(name)
+								if (meta?.kind !== ExprKind.GlobalStyles) continue
+
+								const p = e
+								const data = addData(ExprKind.GlobalStyles, name)
+								ctx.record({
+									name,
+									node: p,
+									data: {
+										start: p.start,
+										end: p.end,
+										transform: () => ({ kind: TransformedKind.String, value: data }),
+									},
+								})
+							}
+						},
+						// <Global styles={globalStyles} />
+						JSXExpressionContainer(node, ctx) {
+							if (!hasGlobalStyles) return
+
+							if (node.expression.type !== "Identifier") return
+
+							const name = node.expression.name
+							const meta = importMap.get(name)
+							if (meta?.kind !== ExprKind.GlobalStyles) return
+
+							const p = node.expression
+							const data = addData(ExprKind.GlobalStyles, name)
+							ctx.record({
+								name,
+								node: p,
+								data: {
+									start: p.start,
+									end: p.end,
+									transform: () => ({ kind: TransformedKind.String, value: data }),
+								},
+							})
+						},
+						CallExpression(node, ctx) {
+							if (
+								node.callee.type !== "TaggedTemplateExpression" ||
+								node.callee.tag.type !== "Identifier"
+							) {
+								return
+							}
+
+							if (importMap.get(node.callee.tag.name)?.kind === ExprKind.Wrap) {
+								node.callee.parent = node
+							}
+						},
 						/**
 						 * <div tw="bg-black" /> ==> <div css={_tw[<i>]} />
 						 */
@@ -347,57 +494,6 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 								},
 							})
 						},
-						SpreadElement(node, ctx) {
-							if (globalStyles) return
-
-							if (node.argument.type === "Identifier" && node.argument.name === "globalStyles") {
-								ctx.record({
-									name: "globalStyles",
-									node,
-									data: {
-										start: 0,
-										end: 0,
-										transform: () => {
-											console.log("why")
-											let value = "const globalStyles = {};"
-											return { kind: TransformedKind.String, value }
-										},
-									},
-								})
-
-								globalStyles = true
-							}
-						},
-						VariableDeclarator(node, ctx) {
-							if (globalStyles) return
-
-							// const v1 = globalStyles
-							// const v2 = {...globalStyles}
-						},
-						JSXExpressionContainer(node, ctx) {
-							if (globalStyles) return
-
-							// <Global styles={[globalStyles, appStyle]} />
-							// <Global styles={globalStyles} />
-						},
-						CallExpression(node, ctx) {
-							if (
-								node.callee.type !== "TaggedTemplateExpression" ||
-								node.callee.tag.type !== "Identifier"
-							) {
-								return
-							}
-
-							const meta = importMap.get(node.callee.tag.name)
-							if (meta?.type !== "named") {
-								return
-							}
-
-							const kind = meta.kind
-							if (kind === ExprKind.Wrap) {
-								node.callee.parent = node
-							}
-						},
 						// --- tw`...` / tx`...` ---
 						// tw`` => css({...})
 						// tx`` => {...}
@@ -408,12 +504,10 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 							const quasi = node.quasi
 
 							if (tag.type === "Identifier") {
-								const meta = importMap.get(tag.name)
-								if (meta?.type !== "named") {
+								const kind = importMap.get(tag.name)?.kind
+								if (!kind) {
 									return
 								}
-
-								const kind = meta.kind
 
 								if (kind === ExprKind.Wrap) {
 									const input = getQuasiValue(quasi)

@@ -24,13 +24,12 @@ export function expandImportMap(): LibImportMap {
 	return OFFICIAL_LIBRARIES
 }
 
-export type PackageMeta = { type: "named"; kind: ExprKind } | { type: "namespace"; config: Record<string, ExprKind> }
+export type PackageMeta = { kind: ExprKind; decl: ESTree.ImportDeclaration }
 
 export interface ImportMap {
 	addFromImportDecl(importDecl: ESTree.ImportDeclaration): void
 	get(importedName: string): PackageMeta | undefined
 	getTrackedNames(): string[]
-	isEmpty(): boolean
 }
 
 export function createImportMap(registeredImports: LibImportMap): ImportMap {
@@ -53,12 +52,12 @@ export function createImportMap(registeredImports: LibImportMap): ImportMap {
 					const importedName = spec.imported.type === "Identifier" ? spec.imported.name : spec.imported.value
 					const kind = config[importedName]
 					if (kind !== undefined) {
-						importPackages.set(spec.local.name, { type: "named", kind })
+						importPackages.set(spec.local.name, { kind, decl: importDecl })
 					}
 				} else if (spec.type === "ImportDefaultSpecifier") {
 					const kind = config.default
 					if (kind !== undefined) {
-						importPackages.set(spec.local.name, { type: "named", kind })
+						importPackages.set(spec.local.name, { kind, decl: importDecl })
 					}
 				}
 			}
@@ -68,9 +67,6 @@ export function createImportMap(registeredImports: LibImportMap): ImportMap {
 		},
 		getTrackedNames() {
 			return [...importPackages.keys()]
-		},
-		isEmpty() {
-			return importPackages.size === 0
 		},
 	}
 }

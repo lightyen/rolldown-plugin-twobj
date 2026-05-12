@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest"
 import { rolldown } from "rolldown"
-import twobjPlugin from "../src/index.ts"
+import twobj from "../src/index.ts"
+import emotion from "@rolldown/plugin-emotion"
+import react from "@vitejs/plugin-react"
 import { globSync } from "tinyglobby"
 import { readFileSync, existsSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -53,7 +55,9 @@ async function transform(code: string, options: TwobjPluginOptions, filename = "
 					if (id === virtualEntry) return code
 				},
 			},
-			twobjPlugin({
+			emotion(),
+			react({ jsxImportSource: "@emotion/react" }),
+			twobj({
 				tailwindConfig,
 				...options,
 			}),

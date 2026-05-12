@@ -1,6 +1,7 @@
 import { globalStyles, theme, tw, tx, wrap } from "twobj"
-import { css } from "@emotion/react"
-const v = { ...globalStyles }
+import { Global } from "@emotion/react"
+const v1 = globalStyles
+console.log(v1)
 
 tw`divide-black`
 tx`flex items-center font-bold text-lg after:text-cyan-400`
@@ -17,7 +18,7 @@ export function A() {
 		<div tw="flex justify-center mx-auto" css={wrap`md:`({ borderTopWidth: "1px", ...tw`bg-red-500` })}>
 			<span css={[tw`text-gray-700`, tw`bg-gray-100`]}>{theme`colors.blue.500 / 30%` as string}</span>
 			<Header tw="(active: first-of-type:):bg-red-300">Header</Header>
-			<div tw="">Empty</div>
+			<div tw="divide-black">Empty</div>
 		</div>
 	)
 }
@@ -33,6 +34,11 @@ const Styled2 = tw.input`hidden`
 
 const Styled3 = tw("input")`hidden`
 
-const k1 = <Global styles={[globalStyles, appStyle]} />
-
-const k2 = <Global styles={globalStyles} />
+export function G() {
+	return (
+		<>
+			<Global styles={[globalStyles]} />
+			<Global styles={globalStyles} />
+		</>
+	)
+}
