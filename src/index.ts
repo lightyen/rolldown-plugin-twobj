@@ -116,10 +116,6 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 							: "js"
 				const program = meta?.ast ?? this.parse(s.original, { lang })
 
-				const sourceContent = s.original
-				const fileStem = path.basename(id, path.extname(id))
-				const dirName = path.basename(path.dirname(id))
-
 				const importMap = createImportMap(registeredImports)
 
 				for (const node of program.body) {
@@ -223,6 +219,10 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						dataIndex += 1
 					}
 					return `_tw[${i}]`
+				}
+
+				if (!trackedNames.some(t => t === "tw")) {
+					trackedNames.push("tw")
 				}
 
 				const sv = new ScopedVisitor<RecordData>({
