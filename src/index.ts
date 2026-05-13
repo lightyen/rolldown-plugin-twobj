@@ -34,6 +34,7 @@ type Transformed = TransformedString | TransformedCssParts | TransformedWrapCall
 interface TransformedString {
 	kind: TransformedKind.String
 	value: string
+	twProp?: TextRange
 }
 
 interface TransformedCssParts {
@@ -41,7 +42,7 @@ interface TransformedCssParts {
 	value: string
 	parts: TextRange[]
 	append: boolean
-	tw: TextRange
+	twProp: TextRange
 }
 
 interface TransformedWrapCallExpr {
@@ -559,7 +560,11 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 									data: {
 										start: end,
 										end: end,
-										transform: () => ({ kind: TransformedKind.String, value: `css={${data}}` }),
+										transform: () => ({
+											kind: TransformedKind.String,
+											value: `css={${data}}`,
+											twProp: [tw.start, tw.end],
+										}),
 									},
 								})
 								return
@@ -587,7 +592,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 											value: data,
 											parts: css_content,
 											append: tw_start > css_start,
-											tw: [tw_start, tw_end],
+											twProp: [tw_start, tw_end],
 										} satisfies TransformedCssParts
 									},
 								},
@@ -851,7 +856,14 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						const [t, value] = render(c)
 
 						if (!isDev) {
-							if (t.kind === TransformedKind.CssParts) s.remove(...t.tw)
+							switch (t.kind) {
+								case TransformedKind.String:
+									if (t.twProp) s.remove(...t.twProp)
+									break
+								case TransformedKind.CssParts:
+									s.remove(...t.twProp)
+									break
+							}
 						}
 
 						const { start, end } = c.node
