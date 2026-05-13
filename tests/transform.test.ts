@@ -8,12 +8,11 @@ import { globSync } from "tinyglobby"
 import { describe, expect, it } from "vitest"
 import type { TwobjPluginOptions } from "../src/index.ts"
 import twobj from "../src/index.ts"
-import tailwindConfig from "../tailwind.config.ts"
+import tailwindConfig from "./tailwind.config.ts"
 
 // https://ast-explorer.dev/
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures")
-const fixturesLabelsDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures-labels")
 
 // Get all fixture directories (input.tsx or input.js files)
 const fixturePaths = globSync(["*/input.tsx", "*/input.js", "**/*/input.tsx", "**/*/input.js"], {

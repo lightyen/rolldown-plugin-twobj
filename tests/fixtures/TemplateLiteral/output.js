@@ -37,7 +37,6 @@ _tw[12] = /* @__PURE__ */ css({
 });
 function Header(props) {
 	return /* @__PURE__ */ jsx("h1", {
-		tw: "border-y-4 border-indigo-400 sm:(rounded-2xl border-l-indigo-300 flex justify-around)",
 		css: _tw[0],
 		...props
 	});
@@ -54,12 +53,10 @@ function A() {
 				children: _tw[6]
 			}),
 			/* @__PURE__ */ jsx(Header, {
-				tw: "(active: first-of-type:):bg-red-300",
 				css: _tw[7],
 				children: "Header"
 			}),
 			/* @__PURE__ */ jsx("div", {
-				tw: "divide-black",
 				css: _tw[8],
 				style: _tw[9],
 				children: "Empty"
@@ -68,6 +65,6 @@ function A() {
 	});
 }
 _tw[10], _tw[11];
-const Separator = /* @__PURE__ */ styled("hr", { target: "ewuq8me0" })(_tw[12]);
+const Separator = /* @__PURE__ */ styled("hr", { target: "e6s4fge0" })(_tw[12]);
 //#endregion
 export { A, Header, Separator };

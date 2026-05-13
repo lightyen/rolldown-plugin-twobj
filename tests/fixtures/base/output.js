@@ -186,7 +186,6 @@ _tw[3];
 _tw[4];
 function Header(props) {
 	return /* @__PURE__ */ jsx("h1", {
-		tw: "border-y-4 border-indigo-400 sm:(rounded-2xl border-l-indigo-300 flex justify-around)",
 		css: _tw[5],
 		...props
 	});
@@ -203,12 +202,10 @@ function A() {
 				children: _tw[11]
 			}),
 			/* @__PURE__ */ jsx(Header, {
-				tw: "(active: first-of-type:):bg-red-300",
 				css: _tw[12],
 				children: "Header"
 			}),
 			/* @__PURE__ */ jsx("div", {
-				tw: "divide-black",
 				css: _tw[1],
 				children: "Empty"
 			})

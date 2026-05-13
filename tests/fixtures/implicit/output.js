@@ -7,10 +7,7 @@ _tw[0] = /* @__PURE__ */ css({ "@media (min-width: 768px)": {
 	"color": "#fff"
 } });
 function G() {
-	return /* @__PURE__ */ jsx("div", {
-		tw: "md:(bg-black text-white)",
-		css: _tw[0]
-	});
+	return /* @__PURE__ */ jsx("div", { css: _tw[0] });
 }
 //#endregion
 export { G };

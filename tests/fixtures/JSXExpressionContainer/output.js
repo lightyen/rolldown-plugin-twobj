@@ -20,30 +20,12 @@ _tw[3] = /* @__PURE__ */ css({
 });
 function Test() {
 	return /* @__PURE__ */ jsxs("div", { children: [
-		/* @__PURE__ */ jsx("span", {
-			tw: "content-['ab\\tab']",
-			css: _tw[0]
-		}),
-		/* @__PURE__ */ jsx("span", {
-			tw: "content-[\"ab\\tab\"]",
-			css: _tw[1]
-		}),
-		/* @__PURE__ */ jsx("span", {
-			tw: "content-['ab	ab']",
-			css: _tw[2]
-		}),
-		/* @__PURE__ */ jsx("span", {
-			tw: "content-[\"ab	ab\"]",
-			css: _tw[3]
-		}),
-		/* @__PURE__ */ jsx("span", {
-			tw: `content-['ab\tab']`,
-			css: _tw[2]
-		}),
-		/* @__PURE__ */ jsx("span", {
-			tw: `content-["ab\tab"]`,
-			css: _tw[3]
-		})
+		/* @__PURE__ */ jsx("span", { css: _tw[0] }),
+		/* @__PURE__ */ jsx("span", { css: _tw[1] }),
+		/* @__PURE__ */ jsx("span", { css: _tw[2] }),
+		/* @__PURE__ */ jsx("span", { css: _tw[3] }),
+		/* @__PURE__ */ jsx("span", { css: _tw[2] }),
+		/* @__PURE__ */ jsx("span", { css: _tw[3] })
 	] });
 }
 //#endregion

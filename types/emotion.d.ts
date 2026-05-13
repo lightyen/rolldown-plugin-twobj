@@ -1,6 +1,5 @@
-import { Interpolation, PropsOf, SerializedStyles, Theme } from "@emotion/react"
-import { CSSInterpolation } from "@emotion/serialize"
-import { FilteringStyledOptions, StyledComponent, StyledOptions } from "@emotion/styled"
+import type { FunctionInterpolation, Interpolation, PropsOf, SerializedStyles, Theme } from "@emotion/react"
+import type { FilteringStyledOptions, StyledComponent, StyledOptions } from "@emotion/styled"
 import {} from "react"
 
 declare module "react" {
@@ -11,6 +10,7 @@ declare module "react" {
 }
 
 declare module "twobj" {
+	type CSSInterpolation<T = unknown> = Exclude<Interpolation<T>, FunctionInterpolation<T>>
 	/**
 	 * @typeparam ComponentProps  Props which will be included when withComponent is called
 	 * @typeparam SpecificComponentProps  Props which will *not* be included when withComponent is called
