@@ -23,7 +23,10 @@ export function expandImportMap(): LibImportMap {
 	return OFFICIAL_LIBRARIES
 }
 
-export type PackageMeta = { kind: ExprKind; decl: ESTree.ImportDeclaration }
+export interface PackageMeta {
+	kind: ExprKind
+	decl: ESTree.ImportDeclaration
+}
 
 export interface ImportMap {
 	addFromImportDecl(importDecl: ESTree.ImportDeclaration): void

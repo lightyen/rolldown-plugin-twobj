@@ -1,12 +1,22 @@
-import type { Plugin } from "rolldown"
-import path from "node:path"
 import { ScopedVisitor } from "oxc-unshadowed-visitor"
-import { Visitor, type ESTree } from "rolldown/utils"
-import { createImportMap, expandImportMap } from "./import-map.js"
-import type { TwobjPluginOptions } from "./types.js"
+import type { Plugin } from "rolldown"
+import { rolldownString, RolldownString, withMagicString } from "rolldown-string"
+import { type ESTree, Visitor } from "rolldown/utils"
+import { createContext, type CSSProperties, ParseError, resolveConfig } from "twobj"
 import { ExprKind, regexEscape } from "./common.js"
-import { withMagicString } from "rolldown-string"
-import { createContext, CSSProperties, resolveConfig } from "twobj"
+import { createImportMap, expandImportMap } from "./import-map.js"
+import { getPos } from "./source-map.js"
+
+export interface TwobjPluginOptions {
+	tailwindConfig?: import("twobj").ConfigJS
+
+	throwError?: boolean
+	/**
+	 * Generate source maps for emotion CSS.
+	 * @default true for development, otherwise false
+	 */
+	// sourceMap?: boolean
+}
 
 type TextRange = [number, number]
 
@@ -80,7 +90,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 	const registeredImports = expandImportMap()
 
 	const tailwindConfig = resolveConfig(options.tailwindConfig ?? {})
-	const tw = createContext(tailwindConfig)
+	const tw = createContext(tailwindConfig, { throwError: options.throwError })
 
 	return {
 		name: "rolldown-plugin-twobj",
@@ -88,7 +98,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 		enforce: "pre",
 
 		// @ts-expect-error Vite-specific hook
-		async configResolved(config) {
+		configResolved(config) {
 			isDev = !config.isProduction
 		},
 
@@ -125,21 +135,23 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 				}
 
 				const trackedNames = importMap.getTrackedNames()
-				const hasEmotionCss = importMap.get("css")?.kind === ExprKind.EmotionCss
-				const hasEmotionStyled = importMap.get("styled")?.kind === ExprKind.EmotionStyled
-				const hasGlobalStyles = importMap.get("globalStyles")?.kind === ExprKind.GlobalStyles
+				const hasImportEmotionCss = importMap.get("css")?.kind === ExprKind.EmotionCss
+				const hasImportEmotionStyled = importMap.get("styled")?.kind === ExprKind.EmotionStyled
+				const hasImportGlobalStyles = importMap.get("globalStyles")?.kind === ExprKind.GlobalStyles
 
 				let needEmotionCss = false
 				let needEmotionStyled = false
-				let dataIndex = 0
-				const cached = new Map<string, number>()
-				const header: { transform(): string } = { transform: () => "" }
+				const header: { index: number; transform(): string } = { index: 0, transform: () => "" }
 
 				interface Item {
 					kind: ExprKind
 					data: unknown
 				}
+
+				let dataIndex = 0
 				const dataArray: (Item | null)[] = []
+				const dataCache = new Map<string, number>()
+				const cssCache = new Map<string, number>()
 
 				function jsxAttributeValue(node: ESTree.JSXAttribute | null): string {
 					if (!node) {
@@ -152,12 +164,13 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					if (value.type === "Literal") {
 						return value.value
 					}
-					if (
-						value.type === "JSXExpressionContainer" &&
-						value.expression.type === "Literal" &&
-						typeof value.expression.value === "string"
-					) {
-						return value.expression.value
+					if (value.type === "JSXExpressionContainer") {
+						if (value.expression.type === "Literal" && typeof value.expression.value === "string") {
+							return value.expression.value
+						}
+						if (value.expression.type === "TemplateLiteral") {
+							return getQuasiValue(value.expression)
+						}
 					}
 					return ""
 				}
@@ -181,44 +194,93 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					return []
 				}
 
-				function buildTheme(value: unknown): unknown {
-					if (Array.isArray(value) && value.every(v => typeof v === "string")) {
-						return value.join(", ")
+				function addStyle(kind: ExprKind, input: string, pstart?: number): string {
+					try {
+						return __addStyle(kind, input)
+					} catch (error) {
+						throw createError(error as ParseError, pstart)
 					}
-					return value
 				}
 
-				function addData(kind: ExprKind, input: string): string {
-					let i = cached.get(input)
-					if (i == undefined) {
-						i = dataIndex
-						cached.set(input, i)
-						switch (kind) {
-							case ExprKind.GlobalStyles:
-								dataArray[i] = { kind, data: tw.globalStyles }
-								break
-							case ExprKind.Tw:
-								dataArray[i] = { kind, data: tw.css(input) }
-								needEmotionCss = true
-								break
-							case ExprKind.Tx:
-								dataArray[i] = { kind, data: tw.css(input) }
-								break
-							case ExprKind.Theme:
-								dataArray[i] = { kind, data: buildTheme(tw.theme(input)) }
-								break
-							case ExprKind.Wrap:
-								dataArray[i] = { kind, data: tw.wrap(input)(Math.E as unknown as CSSProperties) }
-								break
-							case ExprKind.EmotionStyled:
-								needEmotionStyled = true
-								break
-							default:
-								dataArray[i] = null
-						}
-						dataIndex += 1
+				function __addStyle(kind: ExprKind, input: string): string {
+					let i: number
+
+					switch (kind) {
+						case ExprKind.Tw:
+						case ExprKind.EmotionStyled:
+							{
+								const ans = cssCache.get(input)
+								if (ans != null) {
+									return `_tw[${ans}]`
+								}
+								i = dataIndex
+								cssCache.set(input, i)
+								dataIndex += 1
+							}
+							break
+						default:
+							{
+								const ans = dataCache.get(input)
+								if (ans != null) {
+									return `_tw[${ans}]`
+								}
+								i = dataIndex
+								dataCache.set(input, i)
+								dataIndex += 1
+							}
+							break
 					}
+
+					switch (kind) {
+						case ExprKind.GlobalStyles:
+							dataArray[i] = { kind: ExprKind.GlobalStyles, data: tw.globalStyles }
+							break
+						case ExprKind.Tw:
+							dataArray[i] = { kind: ExprKind.Tw, data: tw.css(input) }
+							needEmotionCss = true
+							break
+						case ExprKind.Tx:
+							dataArray[i] = { kind: ExprKind.Tx, data: tw.css(input) }
+							break
+						case ExprKind.Theme:
+							{
+								const value = tw.theme(input)
+								dataArray[i] = {
+									kind: ExprKind.Theme,
+									data:
+										Array.isArray(value) && value.every(v => typeof v === "string")
+											? value.join(", ")
+											: value,
+								}
+							}
+							break
+						case ExprKind.Wrap:
+							dataArray[i] = {
+								kind: ExprKind.Wrap,
+								data: tw.wrap(input)(Math.E as unknown as CSSProperties),
+							}
+							break
+						case ExprKind.EmotionStyled:
+							dataArray[i] = { kind: ExprKind.Tw, data: tw.css(input) }
+							needEmotionCss = true
+							needEmotionStyled = true
+							break
+						default:
+							dataArray[i] = null
+					}
+
 					return `_tw[${i}]`
+				}
+
+				function createError(err: ParseError, offset = 0): unknown {
+					// eslint-disable-next-line @typescript-eslint/no-unused-vars
+					const pos = getPos(s.original, offset)
+					// eslint-disable-next-line @typescript-eslint/no-unused-vars
+					const filename = id
+
+					// TODO: format parse error
+
+					return
 				}
 
 				if (!trackedNames.some(t => t === "tw")) {
@@ -229,21 +291,18 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					trackedNames,
 					walk: (program, visitor) => new Visitor(visitor).visit(program),
 					visitor: {
-						Program(node, ctx) {
-							let index = 0
-
-							index = Math.max(
-								index,
+						Program() {
+							header.index = Math.max(
 								importMap.get("css")?.decl.end ?? 0,
 								importMap.get("styled")?.decl.end ?? 0,
 							)
 
 							header.transform = () => {
 								let value = "\n"
-								if (needEmotionCss && !hasEmotionCss) {
+								if (needEmotionCss && !hasImportEmotionCss) {
 									value += `import { css } from "@emotion/react";\n`
 								}
-								if (needEmotionStyled && !hasEmotionStyled) {
+								if (needEmotionStyled && !hasImportEmotionStyled) {
 									value += `import styled from "@emotion/styled";\n`
 								}
 
@@ -316,7 +375,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 							})
 						},
 						SpreadElement(node, ctx) {
-							if (!hasGlobalStyles) return
+							if (!hasImportGlobalStyles) return
 
 							if (node.argument.type !== "Identifier") return
 							const name = node.argument.name
@@ -324,7 +383,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 							if (meta?.kind !== ExprKind.GlobalStyles) return
 
 							const p = node.argument
-							const data = addData(ExprKind.GlobalStyles, name)
+							const data = addStyle(ExprKind.GlobalStyles, name, p.start)
 							ctx.record({
 								name,
 								node: p,
@@ -336,7 +395,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 							})
 						},
 						VariableDeclarator(node, ctx) {
-							if (!hasGlobalStyles) return
+							if (!hasImportGlobalStyles) return
 
 							if (node.init?.type !== "Identifier") return
 
@@ -345,7 +404,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 							if (meta?.kind !== ExprKind.GlobalStyles) return
 
 							const p = node.init
-							const data = addData(ExprKind.GlobalStyles, name)
+							const data = addStyle(ExprKind.GlobalStyles, name, p.start)
 							ctx.record({
 								name,
 								node: p,
@@ -358,7 +417,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						},
 						// <Global styles={[globalStyles, appStyle]} />
 						ArrayExpression(node, ctx) {
-							if (!hasGlobalStyles) return
+							if (!hasImportGlobalStyles) return
 
 							for (const e of node.elements) {
 								if (e?.type !== "Identifier") continue
@@ -367,7 +426,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 								if (meta?.kind !== ExprKind.GlobalStyles) continue
 
 								const p = e
-								const data = addData(ExprKind.GlobalStyles, name)
+								const data = addStyle(ExprKind.GlobalStyles, name, p.start)
 								ctx.record({
 									name,
 									node: p,
@@ -381,7 +440,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 						},
 						// <Global styles={globalStyles} />
 						JSXExpressionContainer(node, ctx) {
-							if (!hasGlobalStyles) return
+							if (!hasImportGlobalStyles) return
 
 							if (node.expression.type !== "Identifier") return
 
@@ -390,7 +449,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 							if (meta?.kind !== ExprKind.GlobalStyles) return
 
 							const p = node.expression
-							const data = addData(ExprKind.GlobalStyles, name)
+							const data = addStyle(ExprKind.GlobalStyles, name, p.start)
 							ctx.record({
 								name,
 								node: p,
@@ -436,6 +495,28 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 
 								return
 							}
+
+							if (hasImportGlobalStyles) {
+								for (const a of node.arguments) {
+									if (a.type !== "Identifier") continue
+
+									const name = a.name
+									const meta = importMap.get(name)
+									if (meta?.kind !== ExprKind.GlobalStyles) return
+
+									const p = a
+									const data = addStyle(ExprKind.GlobalStyles, name, p.start)
+									ctx.record({
+										name,
+										node: p,
+										data: {
+											start: p.start,
+											end: p.end,
+											transform: () => ({ kind: TransformedKind.String, value: data }),
+										},
+									})
+								}
+							}
 						},
 						/**
 						 * <div tw="bg-black" /> ==> <div css={_tw[<i>]} />
@@ -470,13 +551,13 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 									return
 								}
 
-								const data = addData(ExprKind.Tw, input)
-								const [start, end] = [tw.start, tw.end]
+								const data = addStyle(ExprKind.Tw, input, node.start)
+								const [, end] = [tw.start, tw.end]
 								ctx.record({
 									name: "tw",
 									node,
 									data: {
-										start: start,
+										start: end,
 										end: end,
 										transform: () => ({ kind: TransformedKind.String, value: `css={${data}}` }),
 									},
@@ -493,7 +574,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 							const [tw_start, tw_end] = [tw.start, tw.end]
 							const [css_start, css_end] = [css.start, css.end]
 							const css_content = jsxCssExpr(css)
-							const data = addData(ExprKind.Tw, input)
+							const data = addStyle(ExprKind.Tw, input, node.start)
 							ctx.record({
 								name: "tw",
 								node,
@@ -529,7 +610,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 
 								if (kind === ExprKind.Wrap) {
 									const input = getQuasiValue(quasi)
-									const data = addData(ExprKind.Wrap, input)
+									const data = addStyle(ExprKind.Wrap, input, node.start)
 
 									if (node.parent?.type === "CallExpression") {
 										const call_expr = node.parent
@@ -560,10 +641,10 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 									kind === ExprKind.Tw ||
 									kind === ExprKind.Tx ||
 									kind === ExprKind.Theme ||
-									ExprKind.Wrap
+									kind === ExprKind.Wrap
 								) {
 									const input = getQuasiValue(quasi)
-									const data = addData(kind, input)
+									const data = addStyle(kind, input, node.start)
 									ctx.record({
 										name: tag.name,
 										node,
@@ -589,9 +670,8 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 
 								const property = tag.property.name
 								const input = getQuasiValue(quasi)
-								const data = addData(ExprKind.Tx, input)
+								const data = addStyle(ExprKind.EmotionStyled, input, node.start)
 
-								needEmotionStyled = true
 								ctx.record({
 									name: "tw",
 									node,
@@ -603,7 +683,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 												kind: TransformedKind.StyledCallExpr,
 												callee: "styled." + property,
 												value: data,
-											} as TransformedStyledCallExpr
+											} satisfies TransformedStyledCallExpr
 										},
 									},
 								})
@@ -622,9 +702,8 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 								const callee_start = tag.start + tag.callee.name.length
 								const callee_end = tag.end
 								const input = getQuasiValue(quasi)
-								const data = addData(ExprKind.Tx, input)
+								const data = addStyle(ExprKind.EmotionStyled, input, node.start)
 
-								needEmotionStyled = true
 								ctx.record({
 									name: "tw",
 									node,
@@ -636,7 +715,7 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 												kind: TransformedKind.StyledCallExpr,
 												callee: "styled" + s.slice(callee_start, callee_end),
 												value: data,
-											} as TransformedStyledCallExpr
+											} satisfies TransformedStyledCallExpr
 										},
 									},
 								})
@@ -695,6 +774,12 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					insert(data, root)
 				}
 
+				interface Replacement {
+					start: number
+					end: number
+					ms: RolldownString
+				}
+
 				function render(e: AdvancedRecordData): [Transformed, string] {
 					const t = e.node.transform()
 					if (t.kind === TransformedKind.String) {
@@ -702,63 +787,78 @@ export default function twobjPlugin(options: TwobjPluginOptions = {}): Plugin {
 					}
 
 					if (t.kind === TransformedKind.CssParts) {
-						const parts = t.parts.map(([a, b]) => s.slice(a, b))
+						const parts = t.parts.map<Replacement>(([a, b]) => ({
+							start: a,
+							end: b,
+							ms: rolldownString(s.slice(a, b), id),
+						}))
 
 						if (e.children) {
 							for (const c of e.children) {
-								const index = t.parts.findIndex(p => rangeIn(c.node, p))
-								if (index !== -1) {
-									const [_, inner] = render(c)
-									parts[index] =
-										s.slice(t.parts[index][0], c.node.start) +
-										inner +
-										s.slice(c.node.end, t.parts[index][1])
-								}
+								const index = parts.findIndex(p => rangeIn(c.node, p))
+								if (index === -1) continue
+
+								const [, value] = render(c)
+								const p = parts[index]
+								p.ms.update(c.node.start - p.start, c.node.end - p.start, value)
 							}
 						}
 
+						const result = parts.map(p => p.ms.toString())
+
 						if (t.append) {
-							parts.push(t.value)
+							result.push(t.value)
 						} else {
-							parts.unshift(t.value)
+							result.unshift(t.value)
 						}
-						return [t, `css={[${parts.join(",")}]}`]
+
+						if (result.length > 1) {
+							return [t, `css={[${result.join(",")}]}`]
+						} else {
+							return [t, `css={${result.join(",")}}`]
+						}
 					}
 
 					if (t.kind === TransformedKind.WrapCallExpr) {
-						const args = t.arguments.map(([a, b]) => s.slice(a, b))
+						const args = t.arguments.map<Replacement>(([a, b]) => ({
+							start: a,
+							end: b,
+							ms: rolldownString(s.slice(a, b), id),
+						}))
 
 						if (e.children) {
 							for (const c of e.children) {
 								const index = t.arguments.findIndex(p => rangeIn(c.node, p))
-								if (index !== -1) {
-									const [_, inner] = render(c)
-									args[index] =
-										s.slice(t.arguments[index][0], c.node.start) +
-										inner +
-										s.slice(c.node.end, t.arguments[index][1])
-								}
+								if (index === -1) continue
+
+								const [, value] = render(c)
+								const p = args[index]
+								p.ms.update(c.node.start - p.start, c.node.end - p.start, value)
 							}
 						}
 
-						return [t, `${t.callee}(${args.join(",")})`]
+						const result = args.map(p => p.ms.toString())
+
+						return [t, `${t.callee}(${result.join(",")})`]
 					}
 
 					return [t, `${t.callee}(${t.value})`]
 				}
 
 				if (root.children) {
-					s.prependLeft(0, header.transform())
+					s.prependLeft(header.index, header.transform())
 					for (const c of root.children) {
 						const [t, value] = render(c)
 
-						if (t.kind === TransformedKind.CssParts) {
-							s.remove(...t.tw)
+						if (!isDev) {
+							if (t.kind === TransformedKind.CssParts) s.remove(...t.tw)
 						}
 
 						const { start, end } = c.node
 						if (start !== end) {
 							s.update(start, end, value)
+						} else {
+							s.appendRight(start, value)
 						}
 					}
 				}

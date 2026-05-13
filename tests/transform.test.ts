@@ -1,16 +1,16 @@
-import { describe, it, expect } from "vitest"
-import { rolldown } from "rolldown"
-import twobj from "../src/index.ts"
 import emotion from "@rolldown/plugin-emotion"
 import react from "@vitejs/plugin-react"
-import { globSync } from "tinyglobby"
-import { readFileSync, existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { TwobjPluginOptions } from "../src/types.ts"
+import { rolldown } from "rolldown"
+import { globSync } from "tinyglobby"
+import { describe, expect, it } from "vitest"
+import type { TwobjPluginOptions } from "../src/index.ts"
+import twobj from "../src/index.ts"
 import tailwindConfig from "../tailwind.config.ts"
 
-// https://playground.oxc.rs/
+// https://ast-explorer.dev/
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures")
 const fixturesLabelsDir = join(dirname(fileURLToPath(import.meta.url)), "fixtures-labels")
@@ -55,12 +55,12 @@ async function transform(code: string, options: TwobjPluginOptions, filename = "
 					if (id === virtualEntry) return code
 				},
 			},
-			emotion(),
-			react({ jsxImportSource: "@emotion/react" }),
 			twobj({
 				tailwindConfig,
-				...options,
+				throwError: true,
 			}),
+			emotion(),
+			react({ jsxImportSource: "@emotion/react" }),
 		],
 	})
 

@@ -1,5 +1,7 @@
-import { Global } from "@emotion/react"
+import { resolveConfig } from "twobj"
+
+resolveConfig({})
 
 export function G() {
-	return <Global />
+	return <div style={{ color: "blue" }} />
 }

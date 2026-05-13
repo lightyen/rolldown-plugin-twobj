@@ -1,3 +1,3 @@
 export function G() {
-	return <div tw="bg-black text-white" />
+	return <div tw="md:(bg-black text-white)" />
 }
