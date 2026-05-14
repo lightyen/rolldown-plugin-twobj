@@ -15,10 +15,11 @@ _tw[0] = /* @__PURE__ */ css({
 	"&[data-state=selected] svg": { "visibility": "visible" }
 });
 _tw[1] = /* @__PURE__ */ css({ "color": "#fca5a5" });
-_tw[2] = /* @__PURE__ */ css({ "color": "#6b7280" });
-_tw[3] = (e) => ({ "@media (min-width: 768px)": e });
-_tw[4] = (e) => ({ "@media (hover: hover) and (pointer: fine)": { "&:hover": e } });
-_tw[5] = /* @__PURE__ */ css({
+_tw[2] = /* @__PURE__ */ css({ "color": "#22c55e" });
+_tw[3] = /* @__PURE__ */ css({ "color": "#6b7280" });
+_tw[4] = (e) => ({ "@media (min-width: 768px)": e });
+_tw[5] = (e) => ({ "@media (hover: hover) and (pointer: fine)": { "&:hover": e } });
+_tw[6] = /* @__PURE__ */ css({
 	"--tw-backdrop-blur": "blur(8px)",
 	"--tw-backdrop-brightness": "initial",
 	"--tw-backdrop-contrast": "initial",
@@ -30,7 +31,7 @@ _tw[5] = /* @__PURE__ */ css({
 	"--tw-backdrop-opacity": "initial",
 	"backdropFilter": "var(--tw-backdrop-blur,) var(--tw-backdrop-brightness,) var(--tw-backdrop-contrast,) var(--tw-backdrop-grayscale,) var(--tw-backdrop-hue-rotate,) var(--tw-backdrop-invert,) var(--tw-backdrop-opacity,) var(--tw-backdrop-saturate,) var(--tw-backdrop-sepia,)"
 });
-_tw[6] = /* @__PURE__ */ css({
+_tw[7] = /* @__PURE__ */ css({
 	"--tw-backdrop-blur": "initial",
 	"--tw-backdrop-brightness": "initial",
 	"--tw-backdrop-contrast": "initial",
@@ -42,7 +43,7 @@ _tw[6] = /* @__PURE__ */ css({
 	"--tw-backdrop-opacity": "initial",
 	"backdropFilter": "var(--tw-backdrop-blur,) var(--tw-backdrop-brightness,) var(--tw-backdrop-contrast,) var(--tw-backdrop-grayscale,) var(--tw-backdrop-hue-rotate,) var(--tw-backdrop-invert,) var(--tw-backdrop-opacity,) var(--tw-backdrop-saturate,) var(--tw-backdrop-sepia,)"
 });
-_tw[7] = /* @__PURE__ */ css({
+_tw[8] = /* @__PURE__ */ css({
 	"--tw-translate-x": "initial",
 	"--tw-translate-y": "initial",
 	"--tw-rotate": "initial",
@@ -99,25 +100,28 @@ _tw[7] = /* @__PURE__ */ css({
 		"opacity": "0"
 	}
 });
-_tw[8] = /* @__PURE__ */ css({ "userSelect": "none" });
-function cond() {
+_tw[9] = /* @__PURE__ */ css({ "userSelect": "none" });
+function cond1() {
+	return true;
+}
+function cond2() {
 	return true;
 }
 function LocaleButton({ hide }) {
 	return /* @__PURE__ */ jsx("div", {
 		css: [
 			_tw[0],
-			cond() ? _tw[1] : _tw[2],
-			_tw[3](_tw[4]([_tw[5], _tw[6]]))
+			cond1() ? _tw[1] : cond2() ? _tw[2] : _tw[3],
+			_tw[4](_tw[5]([_tw[6], _tw[7]]))
 		],
 		children: "Test"
 	});
 }
-const styles = /* @__PURE__ */ css(_tw[7]);
+const styles = /* @__PURE__ */ css(_tw[8]);
 const Label = memo(function Label({ htmlFor, label }) {
 	return /* @__PURE__ */ jsx("label", {
 		htmlFor,
-		css: [_tw[8], styles],
+		css: [_tw[9], styles],
 		children: label
 	});
 });

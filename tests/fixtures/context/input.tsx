@@ -1,7 +1,12 @@
 import { css } from "@emotion/react"
 import { memo } from "react"
 import { tw, wrap } from "twobj"
-function cond(): boolean {
+
+function cond1(): boolean {
+	return true
+}
+
+function cond2(): boolean {
 	return true
 }
 
@@ -10,7 +15,7 @@ export function LocaleButton({ hide }: { hide: boolean }) {
 		<div
 			tw="flex justify-between cursor-pointer py-[8px] px-[10px] [& svg]:invisible [&[data-state=selected] svg]:visible"
 			css={[
-				cond() ? tw`text-red-300` : tw`text-gray-500 `,
+				cond1() ? tw`text-red-300` : cond2() ? tw`text-green-500` : tw`text-gray-500 `,
 				wrap`md:`(wrap`hover:`([tw`backdrop-blur`, tw`backdrop-sepia`])),
 			]}
 		>
